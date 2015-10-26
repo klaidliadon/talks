@@ -1,5 +1,5 @@
 Exploiting mgo
-Complex, recursive structures handling in MongoDb
+Complex, recursive structure handling in MongoDb
 26 Oct 2015
 Tags: go golang
 
@@ -10,7 +10,7 @@ Backend Developer, Tyba
 
 * About me
 
-Software engineer, passionate about his job, that fancies Go and Javascript. 
+Software engineer, passionate about his job, fancies Go and Javascript. 
 I am working at [[http://tyba.com/company/tyba/][Tyba]] as part of the [[http://sourced.tech/][sourced{d}]] team.
 
 A little recap of my experience:
@@ -27,24 +27,24 @@ A little recap of my experience:
 
 * About this talk
 
-We are going throught one of the interesting challanges I faced in my brief experience as Go developer:
+We are going through one of the interesting challenges I faced in my brief experience as a Go developer:
 
 Storing and retrieving *complex* and *recursive* structures using the well known [[http://labix.org/mgo][mgo]] package by [[https://github.com/niemeyer][Gustavo Niemeyer]].
 
-It's a pattern that I came to with a trial-error process in my first days as Gopher, and in this talk I'm to illustrate it step by step how I acheived the result.
+It's a pattern that I came to with a trial-error process on my first days as Gopher, and in this talk I'm going to illustrate step by step how I acheived the result.
 
 * A brief introduction
 
-For one of the project in which I worked as main developer it was requested to create a data structure for an XML schema that could be stored in MongoDb.
+For one of the projects in which I worked as main developer it was requested to create a data structure for an XML schema that could be stored in MongoDb.
 
-Since because the application would have processed and stored a huge volume of records I had to find a way to store minimal information without data losses.
+As the application would have to process and store a huge volume of records I had to find a way to store minimal information without data loss.
 
 * First steps
 
 The *note* schema will be the example that we will use for this talk:
 
 .image images/xsd.png _ 650
-.caption Sample note with multiple recepients.
+.caption Sample note with multiple recipients.
 
 * First Steps
 
@@ -59,7 +59,7 @@ We identify 3 main node types:
 
 - *Leaf*: a node containing a value.
 
-- *Object*: node containing other nodes.
+- *Object*: a node containing other nodes.
 
 - *List*: a repetition of nodes.
 
@@ -106,7 +106,7 @@ In the original versions it holds also:
 
 * List
 
-The `List` represent a repetition of elements of the same time (`maxOccurs>1`). The element that repeat itselfs it's `sample`.
+The `List` represents a repetition of elements of the same time (`maxOccurs>1`). The element that repeats itself it's `sample`.
 
 	type List struct {
 		name   string
@@ -121,7 +121,7 @@ The `List` represent a repetition of elements of the same time (`maxOccurs>1`). 
 
 In the original versions it holds also:
 
-- the minimum and maximum occours.
+- the minimum and maximum occurs.
 
 
 * Object
@@ -151,13 +151,13 @@ In the original versions it holds also:
 
 * A few notes 
 
-- *Other* *fields*: in this presentation everything that it's not related to store/retrive the data from MongoDb it's omitted.
+- *Other* *fields*: in this presentation everything that is not related to storing/retrieving data from MongoDb is omitted.
 
-- *Other* *methods*: same rules applies for all methods unrelated to mgo, as the xml generation.
+- *Other* *methods*: same rules apply for all methods unrelated to mgo, as the xml generation.
 
 * The Note schema
 
-Now let's get back the from the first slides:
+Now let's get back to the first slides:
 
 .image images/schema.png
 
@@ -194,7 +194,7 @@ If we try to save a node in a collection all we get is:
 
 .caption Just the _id field
 
-The simpler solution will be make the fields public and use the `bson:"name"` tag to save and load the field correctly.
+The simpler solution would be to make the fields public and use the `bson:"name"` tag to save and load the field correctly.
 
 	type Leaf struct {
 		NodeName string `bson:"name"`
@@ -202,11 +202,11 @@ The simpler solution will be make the fields public and use the `bson:"name"` ta
 
 .caption Ugly, but it works...
 
-But there is another solution that can prevent to make the fields public.
+But there is another solution that can prevent making the fields public.
 
 * Solution: GetBSON()
 
-If our struct satisfies the interface `bson.Getter` we can overcome private fields saving
+If our struct satisfies the interface `bson.Getter` we can overcome saving private fields
 
 	type Getter interface {
 	    GetBSON() (interface{}, error)
@@ -222,7 +222,7 @@ It allows us to send to MongoDb a complete data structure.
 
 Loading the record that has just been marshalled to Mongodb, shows us the other half of the first problem: if the fields are not public they cannot be populated by mgo. 
 
-If we try load back a `Node` it fails miserably.
+If we try to load back a `Node` it fails miserably.
 
 So, going back to the public fields...
 
@@ -238,13 +238,13 @@ We can use the `bson.Setter` interface to achieve a correct unmarshaling of the 
 
 .caption `bson.Setter`
 
-All we need to do now it's implement the methods for the three node
+All we need to do now is implement the methods for the three nodes
 
 * The Nodes in Go (2)
 
 * Interface
 
-After this solution we can ajust the interface with the methods for marshaling/unmarshaling.
+After this solution we can adjust the interface with the methods for marshaling/unmarshaling.
 
 	type Node interface {
 		Name() string
@@ -255,7 +255,7 @@ After this solution we can ajust the interface with the methods for marshaling/u
 
 .caption Updated `Node` interface
 
-And now the three structs must implement them to be a `Node` themself, duck tiping!
+And now the three structs must implement them to be a `Node` themselves, duck typing!
 
 * Leaf
 
@@ -352,7 +352,7 @@ Same thing happens for the `children` map of the `Object`.
 
 * Solution: struct wrapper
 
-To allow the `Node` to save and load itself recursevly (as a field of other nodes) it needs its own `GetBSON` and `SetBSON` method.
+To allow the `Node` to save and load itself recursively (as a field of other nodes) it needs its own `GetBSON` and `SetBSON` method.
 
 	type Node struct {
 		T Type `bson:"type"`
@@ -385,13 +385,13 @@ To differentiate the nodes we create a new integer type `Type` with specific val
 		TypeList
 	)
 
-It's also usefull add a line to create a `String()` method for the const:
+It's also useful to add a line to create a `String()` method for the const:
 
 	//go:generate stringer -type=Type
 
 .caption run `go generate` before building
 
-Usefull for debugging purpose
+Useful for debugging purposes
 
 * The Node GetBSON
 
@@ -433,7 +433,7 @@ The `Node.SetBSON` uses a temporary struct to get the `Type`.
 
 * The Node SetBSON (2)
 
-Then it unmarshal the raw data in correct struct type.
+Then it unmarshals the raw data into the correct struct type.
 
 	func (n *Node) SetBSON(raw bson.Raw) error {
 		...
@@ -504,7 +504,7 @@ The GetBSON method is used to return the correct `Type` and save it
 
 * Some helper functions
 
-This functions will help us to create some node easily, for testing purpose.
+These functions will help us to create some nodes easily, for testing purposes.
 
 	func NewLeaf(name string) *Node {
 		return &Node{TypeLeaf, &Leaf{name}}
@@ -568,7 +568,7 @@ For every node there is a duplicate entry in the object key and in name field:
 
 .caption Not *DRY* at all
 
-To avoid saving redundant data we could avoid to sent the filed `name` in the map to mongo.
+To avoid saving redundant data we could avoid sending the filed `name` in the map to mongo.
 
 But how to recover it?
 
@@ -695,7 +695,7 @@ The `bson.D` type is a slice (ordered list) of key value entries `bson.DocElem`.
 
 * Loading order
 
-The `SetBSON` calls the children setup because is the only moment it's aware of the names.
+The `SetBSON` calls the children setup because it is the only moment it's aware of the names.
 
 	func (o *Object) SetBSON(raw bson.Raw) error {
 		var u struct {
@@ -720,7 +720,7 @@ The `SetBSON` calls the children setup because is the only moment it's aware of 
 
 * Verifing the order (1)
 
-Let's create some `String()` method to read better the nodes
+Let's create some `String()` method to better read the nodes
 
 	func (l *Leaf) String() string { return fmt.Sprintf("(%s)", l.name) }
 
