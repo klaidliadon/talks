@@ -1,0 +1,778 @@
+Exploiting mgo
+Complex, recursive structures handling in MongoDb
+26 Oct 2015
+Tags: go golang
+
+Alex Guerrieri
+Backend Developer, Tyba
+
+[[http://github.com/klaidliadon][Github]] | [[mailto:alex@tyba.com][alex@tyba.com]] | [[mailto:klaidliadon@gmail.com][klaidliadon@gmail.com]]
+
+* About me
+
+Software engineer, passionate about his job, that fancies Go and Javascript. 
+I am working at [[http://tyba.com/company/tyba/][Tyba]] as part of the [[http://sourced.tech/][sourced{d}]] team.
+
+A little recap of my experience:
+
+*Backend*
+
+	- Java EE and PHP development (2 yrs)
+	- Go (2 yrs)
+
+*Frontend*
+
+	- JS and JQuery (1 yr)
+	- Sencha ExtJS (1 yr)
+
+* About this talk
+
+We are going throught one of the interesting challanges I faced in my brief experience as Go developer:
+
+Storing and retrieving *complex* and *recursive* structures using the well known [[http://labix.org/mgo][mgo]] package by [[https://github.com/niemeyer][Gustavo Niemeyer]].
+
+It's a pattern that I came to with a trial-error process in my first days as Gopher, and in this talk I'm to illustrate it step by step how I acheived the result.
+
+* A brief introduction
+
+For one of the project in which I worked as main developer it was requested to create a data structure for an XML schema that could be stored in MongoDb.
+
+Since because the application would have processed and stored a huge volume of records I had to find a way to store minimal information without data losses.
+
+* First steps
+
+The *note* schema will be the example that we will use for this talk:
+
+.image images/xsd.png _ 650
+.caption Sample note with multiple recepients.
+
+* First Steps
+
+Let's represent the schema in a more readable way
+
+.image images/schema.png
+.caption A visual representation of the schema
+
+* Node Types
+
+We identify 3 main node types: 
+
+- *Leaf*: a node containing a value.
+
+- *Object*: node containing other nodes.
+
+- *List*: a repetition of nodes.
+
+
+
+* Common behaviours
+
+The three nodes must respond to a common behaviour.
+
+The following interface would suffice:
+
+	type Node interface {
+		Name() string
+		Children() []*Node
+	}
+
+
+Where:
+
+- `Name()` returns the node name
+- `Children()` returns a slice of child nodes
+
+* The Nodes in Go (1)
+
+* Leaf
+
+The `Leaf` node is the simplest one to implement. It's just the name of the node and no children:
+
+	type Leaf struct {
+		name string
+	}
+
+	func (l *Leaf) Name() string { return l.name }
+
+	func (l *Leaf) Children() []*Node { return nil }
+
+.caption The `Leaf` node
+
+In the original versions it holds also:
+
+- the XML type of the node (string, integer, numeric) 
+- if it's a required node for the schema or not. (minOccurs=0`)
+
+
+* List
+
+The `List` represent a repetition of elements of the same time (`maxOccurs>1`). The element that repeat itselfs it's `sample`.
+
+	type List struct {
+		name   string
+		sample Node
+	}
+
+	func (l *List) Name() string { return l.sample.Name() }
+
+	func (l *List) Children() []Node { return []Node{l.sample} }
+
+.caption The `List` node
+
+In the original versions it holds also:
+
+- the minimum and maximum occours.
+
+
+* Object
+
+The object is a `xs:sequence`, a node that contains other nodes.
+
+	type Object struct {
+		name     string
+		children map[string]*Node
+	}
+
+	func (o *Object) Name() string { return o.name }
+
+	func (o *Object) Children() []*Node {
+		var children = make([]*Node, 0, len(o.children))
+		for _, c := range o.children {
+			children = append(children, c)
+		}
+		return children
+	}
+
+.caption The `Object` node
+
+In the original versions it holds also:
+
+- if it's a required node for the schema or not. (`minOccurs=0`)
+
+* A few notes 
+
+- *Other* *fields*: in this presentation everything that it's not related to store/retrive the data from MongoDb it's omitted.
+
+- *Other* *methods*: same rules applies for all methods unrelated to mgo, as the xml generation.
+
+* The Note schema
+
+Now let's get back the from the first slides:
+
+.image images/schema.png
+
+* The Note schema
+
+It can be represented with these `Node` types as:
+
+	Object {
+		name: "note",
+		children: {
+			"to": List {
+				name: "to",
+				sample: Leaf{ name: "to" },
+			},
+			"from":    Leaf{ name: "from" },
+			"heading": Leaf{ name: "heading" },
+			"body":    Leaf{ name: "body" },
+		}
+	}
+
+.caption The note `Go` representation
+
+The structs defined earlier suffice for the purpose of representing the data.
+
+* Problems
+
+* First: Saving private fields
+
+Private fields are totally ignored by mgo.
+
+If we try to save a node in a collection all we get is:
+
+	{ _id: ObjectId([...]) }
+
+.caption Just the _id field
+
+The simpler solution will be make the fields public and use the `bson:"name"` tag to save and load the field correctly.
+
+	type Leaf struct {
+		NodeName string `bson:"name"`
+	}
+
+.caption Ugly, but it works...
+
+But there is another solution that can prevent to make the fields public.
+
+* Solution: GetBSON()
+
+If our struct satisfies the interface `bson.Getter` we can overcome private fields saving
+
+	type Getter interface {
+	    GetBSON() (interface{}, error)
+	}
+
+.caption `bson.Getter`
+
+This method can be added to all the types.
+
+It allows us to send to MongoDb a complete data structure.
+
+* Second: Loading private fields
+
+Loading the record that has just been marshalled to Mongodb, shows us the other half of the first problem: if the fields are not public they cannot be populated by mgo. 
+
+If we try load back a `Node` it fails miserably.
+
+So, going back to the public fields...
+
+No way!
+
+* Solution: SetBSON()
+
+We can use the `bson.Setter` interface to achieve a correct unmarshaling of the record.
+
+	type Setter interface {
+	    SetBSON(raw Raw) error
+	}
+
+.caption `bson.Setter`
+
+All we need to do now it's implement the methods for the three node
+
+* The Nodes in Go (2)
+
+* Interface
+
+After this solution we can ajust the interface with the methods for marshaling/unmarshaling.
+
+	type Node interface {
+		Name() string
+		Children() []*Node
+		bson.Setter
+		bson.Getter
+	}
+
+.caption Updated `Node` interface
+
+And now the three structs must implement them to be a `Node` themself, duck tiping!
+
+* Leaf
+
+Adding `bson.Getter` and `bson.Setter` capabilities:
+
+	func (l *Leaf) GetBSON() (interface{}, error) {
+		return bson.M{
+			"name": l.name,
+		}, nil
+	}
+
+	func (l *Leaf) SetBSON(raw bson.Raw) error {
+		var m bson.M
+		if err := raw.Unmarshal(&m); err != nil {
+			return err
+		}
+		l.name = m["name"].(string)
+		return nil
+	}
+
+.caption `Leaf` new methods
+
+* Object
+
+Adding `bson.Getter` and `bson.Setter` capabilities:
+
+	func (o *Object) GetBSON() (interface{}, error) {
+		return bson.M{
+			"children": o.children,
+			"name":     o.name,
+		}, nil
+	}
+
+	func (o *Object) SetBSON(raw bson.Raw) error {
+		var u struct {
+			Name     string              `bson:"name"`
+			Children map[string]Node     `bson:"children`
+		}
+		if err := raw.Unmarshal(&u); err != nil {
+			return err
+		}
+		o.name = u.Name
+		o.children = u.Children
+		return nil
+	}
+
+.caption `Object` new methods
+
+* List
+
+Adding `bson.Getter` and `bson.Setter` capabilities:
+
+	func (l *List) GetBSON() (interface{}, error) {
+		return bson.M{
+			"name": l.name
+			"sample": l.sample,
+		}, nil
+	}
+
+	func (l *List) SetBSON(raw bson.Raw) error {
+		var m struct {
+			Sample *Node `bson:"sample"`
+		}
+		if err := raw.Unmarshal(&m); err != nil {
+			return err
+		}
+		l.sample = m.Sample
+		return nil
+	}
+
+.caption `List` new methods
+
+* Third: Saving the fields of type Node
+
+The fields that are interfaces (`Node` type) are simply ignored.
+
+A `Leaf` is saved correctly.
+
+	{ _id: [...], name:"leaf" }
+
+.caption 1/3 types working!
+
+The `sample` field of the `List` is lost.
+
+	{ _id: [...], name:"list" }	// missing sample
+
+.caption still 1/3...
+
+Same thing happens for the `children` map of the `Object`.
+
+	{ _id: [...], name:"obj" }	// missing children
+
+.caption same as before...
+
+* Solution: struct wrapper
+
+To allow the `Node` to save and load itself recursevly (as a field of other nodes) it needs its own `GetBSON` and `SetBSON` method.
+
+	type Node struct {
+		T Type `bson:"type"`
+		INode
+	}
+
+	type INode interface {
+		Name() string
+		Children() []*Node
+		bson.Setter
+		bson.Getter
+	}
+
+.caption Concrete type and embedded interface
+
+The solution lies in a struct (`Node`) that wraps interface (`INode`) as an anonymous field.
+
+This allows the new concrete type `Node` to respond to the `INode` interface.
+
+* Node types
+
+To differentiate the nodes we create a new integer type `Type` with specific values for the each node
+
+	type Type int
+
+	const (
+		_ Type = iota // the zero value is skipped to verify that type is loaded and saved correctly
+		TypeLeaf
+		TypeObject
+		TypeList
+	)
+
+It's also usefull add a line to create a `String()` method for the const:
+
+	//go:generate stringer -type=Type
+
+.caption run `go generate` before building
+
+Usefull for debugging purpose
+
+* The Node GetBSON
+
+The new `Node.GetBSON` uses the `T` field to know the concrete type of the `INode`
+
+	func (n *Node) GetBSON() (interface{}, error) {
+		switch n.T {
+		case TypeLeaf:
+			return n.INode.(*Leaf), nil
+		case TypeObject:
+			return n.INode.(*Object), nil
+		case TypeList:
+			return n.INode.(*List), nil
+		default:
+			return nil, fmt.Errorf("Unknown Type %d", n.T)
+		}
+	}
+
+.caption Return the correct pointer by looking at the type
+
+And uses this information to return the correct struct pointer (with its `GetBSON` method)
+
+* The Node SetBSON (1)
+
+The `Node.SetBSON` uses a temporary struct to get the `Type`.
+	
+	func (n *Node) SetBSON(raw bson.Raw) error {
+		var s struct {
+			T Type `bson:"type"`
+		}
+		if err := raw.Unmarshal(&s); err != nil {
+			return err
+		}
+		n.T = s.T
+		...
+	}
+
+.caption Use an anonymous struct to avoid a stack overflow!
+
+* The Node SetBSON (2)
+
+Then it unmarshal the raw data in correct struct type.
+
+	func (n *Node) SetBSON(raw bson.Raw) error {
+		...
+		switch n.T {
+		case TypeLeaf:
+			var a Leaf
+			if err := raw.Unmarshal(&a); err != nil {
+				return err
+			}
+			n.INode = &a
+		case TypeObject:
+			var a Object
+			[...] // unmarshal and assign
+		case TypeList:
+			var a List
+			[...] // unmarshal and assign
+		default:
+			return fmt.Errorf("Unknown Type: %s", s.T)
+		}
+		return nil
+	}
+
+* Common changes
+
+The children now are `*Node` (a pointer to the type) instead of interfaces.
+
+	func (l *Leaf) Children() []*Node { return nil }
+
+	func (o *Object) Children() []*Node {
+		var children = make([]*Node, 0, len(o.children))
+		for _, c := range o.children {
+			children = append(children, c)
+		}
+		return children
+	}
+
+	func (l *List) Children() []*Node { return []*Node{l.sample} }
+
+.caption The new `children` method
+
+* The Nodes in Go (3)
+
+The GetBSON method is used to return the correct `Type` and save it
+	
+	func (l *Leaf) GetBSON() (interface{}, error) {
+		return bson.M{
+			"type":  TypeLeaf, 
+			"name": l.name,
+		}, nil
+	}
+	func (o *Object) GetBSON() (interface{}, error) {
+		return bson.M{
+			"name": o.name,
+			"children": o.children,
+			"type":     TypeObject,
+		}, nil
+	}
+	func (l *List) GetBSON() (interface{}, error) {
+		return bson.M{
+			"name": l.name,
+			"sample": l.sample,
+			"type":   TypeList,
+		}, nil
+	}
+
+.caption The new `GetBSON` method with the `type` added to the map
+
+
+* Some helper functions
+
+This functions will help us to create some node easily, for testing purpose.
+
+	func NewLeaf(name string) *Node {
+		return &Node{TypeLeaf, &Leaf{name}}
+	}
+
+	func NewObject(name string, children ...*Node) *Node {
+		var cmap = make(map[string]*Node)
+		for _, c := range children {
+			cmap[c.Name()] = c
+		}
+		return &Node{TypeObject, &Object{name, cmap}}
+	}
+
+	func NewList(sample *Node) *Node {
+		return &Node{TypeList, &List{sample}}
+	}
+
+.caption Functions to shorten out test code
+
+* The actual Tree in Go
+
+The `note` schema from the first slides
+
+.image images/schema.png 300 _
+
+Can be represented by the data structure returned by this function call:
+
+	NewObject("note", NewList(NewLeaf("to")), NewLeaf("from"), NewLeaf("heading"), NewLeaf("body"))
+
+This struct can be loaded and saved without data loss or problems
+
+* The actual Tree in Mongo
+
+The resulting document in MongoDb will be:
+
+	{
+		_id: ObjectId([...]), 
+		name: "note", 
+		type: 2, 
+		children: {
+			to:      {
+				type: 3, 
+				name: "to",
+				sample: {type: 1, name: "to"} 
+			},
+			from:    {type: 1, name: "from"},
+			heading: {type: 1, name: "heading"},
+			body:    {type: 1, name: "body"}
+		}
+	}
+
+.caption A nice MongoDb object
+
+* Extra: polishing the code
+
+* Duplicate name
+
+For every node there is a duplicate entry in the object key and in name field:
+
+	from: {type: 1, name: "from"}
+
+.caption Not *DRY* at all
+
+To avoid saving redundant data we could avoid to sent the filed `name` in the map to mongo.
+
+But how to recover it?
+
+We can add to the interface a `setup` method called during the `Node.SetBSON`.
+
+	type INode interface {
+		Name() string
+		Children() []*Node
+		setup(string)
+	}
+
+.caption A method to set name after the load operation
+
+* A setup method
+
+And implement the method in all the nodes
+
+	// Leaf
+	func (l *Leaf) setup(name string) {
+		l.name = name
+	}
+
+	// List
+	func (l *List) setup(name string) {
+		l.sample.setup(name)
+	}
+
+	// Object
+	func (o *Object) setup(name string) {
+		o.name = name
+		for i, c := range o.children {
+			c.setup(i)
+		}
+	}
+
+.caption Pretty and straightforward
+
+
+* Cleaned up Tree BSON
+
+This will save some precious bytes on the object
+
+	{
+		_id: ObjectId([...]), 
+		type: 2, 
+		children: {
+			to:      {
+				type: 3, 
+				sample: {type: 1} 
+			},
+			from:    {type: 1},
+			heading: {type: 1},
+			body:    {type: 1}
+		}
+	}
+
+.caption A lot better... wait! Is something missing?
+
+* Root Name
+
+To avoid losing the root node name we create a schema that contains the root name:
+
+	type Schema struct {
+		Name string        `bson:"name"`
+		Root *Node         `bson:"root"`
+	}
+
+And also a wrapper for SetBSON to setup the root after a load:
+
+	func (s *Schema) SetBSON(raw bson.Raw) error {
+		var a struct {
+			Name string        `bson:"name"`
+			Root *Node         `bson:"root"`
+		}
+		if err := raw.Unmarshal(&a); err != nil {
+			return err
+		}
+		*s = Schema(a)
+		s.Root.setup(a.Name)
+		return nil
+	}
+
+.caption That's why *setup* is private
+
+* Children order
+
+Another thing that could be improved is assuring the order of children in a object.
+
+In a XSD schema the order is important in a sequence.
+
+The object changes to:
+
+	type Object struct {
+		name     string
+		children []*Node
+	}
+
+	func NewObject(name string, children ...*Node) *Node {
+		return &Node{TypeOrdObject, &OrdObject{name, children}}
+	}
+
+	func (o *Object) Children() []*Node { return o.children }
+
+.caption A slice is ordered for sure
+
+* Save Order
+
+The `GetBSON` function becomes:
+
+	func (o *Object) GetBSON() (interface{}, error) {
+		var children bson.D
+		for _, c := range o.children {
+			children = append(children, bson.DocElem{c.Name(), c})
+		}
+		return bson.M{
+			"children": children,
+			"type":     TypeObject,
+		}, nil
+	}
+
+.caption Use the embedded `mgo` capabilities
+
+The `bson.D` type is a slice (ordered list) of key value entries `bson.DocElem`.
+
+* Loading order
+
+The `SetBSON` calls the children setup because is the only moment it's aware of the names.
+
+	func (o *Object) SetBSON(raw bson.Raw) error {
+		var u struct {
+			Name     string    `bson:"name"`
+			Children bson.RawD `bson:"children`
+		}
+		if err := raw.Unmarshal(&u); err != nil {
+			return err
+		}
+		o.name = u.Name
+		o.children = make([]*Node, 0, len(u.Children))
+		for _, c := range u.Children {
+			var n Node
+			if err := c.Value.Unmarshal(&n); err != nil {
+				return err
+			}
+			n.setup(c.Name)
+			o.children = append(o.children, &n)
+		}
+		return nil
+	}
+
+* Verifing the order (1)
+
+Let's create some `String()` method to read better the nodes
+
+	func (l *Leaf) String() string { return fmt.Sprintf("(%s)", l.name) }
+
+	func (o *Object) String() string {
+		return fmt.Sprintf("[%s]{%s}", o.name, o.children)
+	}
+
+	func (l *List) String() string { return fmt.Sprintf("%s*", l.sample) }
+
+.caption `(LeafName)` | `[ObjectName]{children..}` | `Sample*
+
+And use the schema with the old and the new `Object version:
+
+	Schema {
+		Id: bson.NewObjectId(), 
+		Name: "note", 
+		Root: NewObject("note", NewLeaf("a"), NewObject("b", NewLeaf("b1"), NewLeaf("b2")),
+			NewList(NewLeaf("c")),
+		),
+	}
+
+* Verifing the order (2)
+
+With the old `Object`, after a save and load operation the resulting schema will be scrambled:
+
+	// Attempt 1 (correct, lucky me)
+	[note]{[(a) [b]{[(b1) (b2)]} (c)*]}
+	// Other attemps (scrambled)
+	[note]{[[b]{[(b2) (b1)]} (c)* (a)]}
+
+	[note]{[(c)* (a) [b]{[(b1) (b2)]}]}
+
+.caption That's not good at all...
+
+With the new implementation the order of the children will be preserved every time:
+	
+	// Attempt 1 (correct, lucky me again)
+	[note]{[(a) [b]{[(b1) (b2)]} (c)*]}
+	// Other attempts (this cannot be a coincidence...)
+	[note]{[(a) [b]{[(b1) (b2)]} (c)*]}
+
+	[note]{[(a) [b]{[(b1) (b2)]} (c)*]}
+
+.caption Better!
+
+* Conclusion
+
+The talk is over! I hope you found it intesting!
+
+.image images/gopher.jpg 400 _
+
+Maybe the pattern will be applied to your current/future MongoDb projects.
+
+
+* End
