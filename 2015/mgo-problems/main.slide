@@ -73,7 +73,7 @@ The following interface would suffice:
 
 	type Node interface {
 		Name() string
-		Children() []*Node
+		Children() []Node
 	}
 
 
@@ -94,7 +94,7 @@ The `Leaf` node is the simplest one to implement. It's just the name of the node
 
 	func (l *Leaf) Name() string { return l.name }
 
-	func (l *Leaf) Children() []*Node { return nil }
+	func (l *Leaf) Children() []Node { return nil }
 
 .caption The `Leaf` node
 
@@ -135,7 +135,7 @@ The object is a `xs:sequence`, a node that contains other nodes.
 
 	func (o *Object) Name() string { return o.name }
 
-	func (o *Object) Children() []*Node {
+	func (o *Object) Children() []Node {
 		var children = make([]*Node, 0, len(o.children))
 		for _, c := range o.children {
 			children = append(children, c)
@@ -248,7 +248,7 @@ After this solution we can adjust the interface with the methods for marshaling/
 
 	type Node interface {
 		Name() string
-		Children() []*Node
+		Children() []Node
 		bson.Setter
 		bson.Getter
 	}
@@ -317,7 +317,7 @@ Adding `bson.Getter` and `bson.Setter` capabilities:
 
 	func (l *List) SetBSON(raw bson.Raw) error {
 		var m struct {
-			Sample *Node `bson:"sample"`
+			Sample Node `bson:"sample"`
 		}
 		if err := raw.Unmarshal(&m); err != nil {
 			return err
@@ -747,22 +747,22 @@ And use the schema with the old and the new `Object version:
 With the old `Object`, after a save and load operation the resulting schema will be scrambled:
 
 	// Attempt 1 (correct, lucky me)
-	[note]{[(a) [b]{[(b1) (b2)]} (c)*]}
+	[note]{(to)* (from) (heading) (body)}
 	// Other attemps (scrambled)
-	[note]{[[b]{[(b2) (b1)]} (c)* (a)]}
+	[note]{(body) (to)* (heading) (from)}
 
-	[note]{[(c)* (a) [b]{[(b1) (b2)]}]}
+	[note]{(heading) (from) (to)* (body)}
 
 .caption That's not good at all...
 
 With the new implementation the order of the children will be preserved every time:
 	
 	// Attempt 1 (correct, lucky me again)
-	[note]{[(a) [b]{[(b1) (b2)]} (c)*]}
+	[note]{(to)* (from) (heading) (body)}
 	// Other attempts (this cannot be a coincidence...)
-	[note]{[(a) [b]{[(b1) (b2)]} (c)*]}
+	[note]{(to)* (from) (heading) (body)}
 
-	[note]{[(a) [b]{[(b1) (b2)]} (c)*]}
+	[note]{(to)* (from) (heading) (body)}
 
 .caption Better!
 
